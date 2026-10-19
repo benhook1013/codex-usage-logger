@@ -298,14 +298,88 @@ def status(directory):
     print('Retention: 90 days, 10,000 rows, 10 MiB maximum; oldest readings removed first.')
 
 
-if __name__ == '__main__':
-    os.umask(0o077)
+def list_history(directory, period='hour', days=7, now=None):
+    now = now or datetime.now(timezone.utc)
+    first_day = now.astimezone().date() - timedelta(days=days - 1)
+    groups = {}
+    for row in sorted(load_history(directory), key=lambda r: datetime.fromisoformat(r['timestamp_utc'])):
+        timestamp = datetime.fromisoformat(row['timestamp_utc']).astimezone()
+        if timestamp.date() < first_day or timestamp > now:
+            continue
+        # Include the UTC offset so the repeated hour at daylight-saving end
+        # remains two distinct hours. Daily rows span the whole local day.
+        label = timestamp.strftime('%Y-%m-%d' if period == 'day' else '%Y-%m-%d %H:00 %z')
+        group = groups.setdefault(label, {'buckets': {}, 'errors': 0})
+        if row['status'] != 'ok':
+            group['errors'] += 1
+            continue
+        bucket = group['buckets'].setdefault(row['limit_id'], {'count': 0, 'events': set()})
+        bucket.update(row=row, time=timestamp.strftime('%H:%M:%S %Z'))
+        bucket['count'] += 1
+        for window in ['weekly', 'five_hour']:
+            event = row[window + '_event']
+            if event in ['reset_timestamp_changed', 'reset_due_or_passed', 'allowance_increased']:
+                bucket['events'].add(event.replace('_', ' '))
+        if row['sampling_gap'] == 'true':
+            bucket['events'].add('sampling gap')
+    if not groups:
+        print(f'No readings in the last {days} local calendar days.')
+        return
+    table = [['Day (local)' if period == 'day' else 'Hour (local)', 'Bucket', 'Last success',
+              'Weekly left', '5h left', 'Credits', 'Readings', 'Errors', 'Events']]
+    for label, group in groups.items():
+        for limit_id, bucket in sorted(group['buckets'].items()) or [('-', None)]:
+            row = bucket['row'] if bucket else {}
+            def percentage(key):
+                value = row.get(key, '')
+                return value + '%' if value else '-'
+            table.append([label, limit_id, bucket['time'] if bucket else '-',
+                          percentage('weekly_left_pct'), percentage('five_hour_left_pct'),
+                          row.get('credit_balance') or '-', str(bucket['count'] if bucket else 0),
+                          str(group['errors']), ', '.join(sorted(bucket['events'])) if bucket else '-'])
+    widths = [max(len(row[i]) for row in table) for i in range(len(table[0]))]
+    for index, row in enumerate(table):
+        print('  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip())
+        if index == 0:
+            print('  '.join('-' * width for width in widths))
+    print('\nValues are the last successful observation per period, not daily/hourly consumption.')
+    print("'-' means unavailable. Errors count failed reads in the period, shared across buckets.")
+
+
+def history_days(value):
+    try:
+        days = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('days must be a whole number from 1 to 90') from None
+    if not 1 <= days <= MAX_AGE_DAYS:
+        raise argparse.ArgumentTypeError('days must be a whole number from 1 to 90')
+    return days
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', nargs='?', choices=['list'], help='List saved history without a network request')
     parser.add_argument('--status', action='store_true', help='Show the latest saved reading without a network request')
     parser.add_argument('--data-dir', type=Path, default=DATA)
     parser.add_argument('--codex', help='Explicit Codex executable (normally auto-detected)')
-    args = parser.parse_args()
+    grouping = parser.add_mutually_exclusive_group()
+    grouping.add_argument('--day', action='store_const', const='day', dest='period', help='One summary per local day')
+    grouping.add_argument('--hour', action='store_const', const='hour', dest='period', help='One summary per local hour (default)')
+    parser.add_argument('--days', type=history_days, help='Local calendar days to list, including today (default: 7; maximum: 90)')
+    args = parser.parse_args(argv)
+    if args.command == 'list' and args.status:
+        parser.error('choose list or --status')
+    if args.command != 'list' and (args.period is not None or args.days is not None):
+        parser.error('--day, --hour, and --days require the list command')
+    if args.command == 'list':
+        list_history(args.data_dir, args.period or 'hour', args.days or 7)
+        return 0
     if args.status:
         status(args.data_dir)
-    else:
-        raise SystemExit(sample(args.data_dir, args.codex))
+        return 0
+    return sample(args.data_dir, args.codex)
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    raise SystemExit(main())
