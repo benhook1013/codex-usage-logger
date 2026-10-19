@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parent
 
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parent
 def env_quote(value):
     if any(c in value for c in '\n\r\0'):
         raise ValueError('Environment paths cannot contain newlines or null bytes')
-    return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`') + '"'
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$') + '"'
 
 
 def install(home, codex_home, sqlite_home=None):
@@ -35,9 +36,19 @@ def install(home, codex_home, sqlite_home=None):
     config.mkdir(parents=True, exist_ok=True, mode=0o700)
     environment = config / 'environment'
     # This file contains a local profile path, not credentials.
-    fd = os.open(environment, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w') as output:
-        output.write(value)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=config,
+                                         prefix='.environment.', delete=False) as output:
+            temporary = Path(output.name)
+            os.fchmod(output.fileno(), 0o600)
+            output.write(value)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, environment)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def main():
