@@ -7,7 +7,11 @@ Requires Linux/WSL with systemd, Python 3.10+, and a logged-in Codex CLI. No Pyt
 ```sh
 python3 install.py
 ~/.local/bin/codex-usage --status
+~/.local/bin/codex-usage list --day
+~/.local/bin/codex-usage list --hour --days 3
 ```
+
+`list` reads saved history only, defaulting to hourly rows over seven local calendar days. Daily/hourly rows show the last successful observation and its time, remaining percentages, credit balance, reading/error counts, and reset/gap events. Missing data is `-`; these are snapshots, not consumption totals. Use `--days 1` for today or up to `--days 90` for retained history.
 
 The installer links the service and command directly to this checkout. Keep it on disk. It preserves the current `CODEX_HOME` and `CODEX_SQLITE_HOME` paths; override them with `--codex-home` and `--sqlite-home`. A Windows login shared with WSL should use the same Linux database directory as the working CLI.
 
@@ -24,3 +28,5 @@ env -u DBUS_SESSION_BUS_ADDRESS systemctl --user disable --now codex-usage.timer
 # Tests (synthetic responses; no account requests)
 PYTHONPATH=src:. python3 -m unittest discover -s tests -v
 ```
+
+CI actions are pinned to exact commits. Renovate opens update PRs, groups routine action updates, and leaves merging to a human. Activate it by granting the [Renovate GitHub app](https://github.com/apps/renovate) access to this repository and merging `renovate.json` into `main`.
