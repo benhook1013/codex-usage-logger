@@ -28,3 +28,5 @@ env -u DBUS_SESSION_BUS_ADDRESS systemctl --user disable --now codex-usage.timer
 # Tests (synthetic responses; no account requests)
 PYTHONPATH=src:. python3 -m unittest discover -s tests -v
 ```
+
+CI actions are pinned to exact commits. Renovate opens update PRs, groups routine action updates, and leaves merging to a human. Activate it by granting the [Renovate GitHub app](https://github.com/apps/renovate) access to this repository and merging `renovate.json` into `main`.
