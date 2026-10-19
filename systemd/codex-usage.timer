@@ -1,0 +1,12 @@
+[Unit]
+Description=Record Codex quota every 15 minutes and resume after WSL starts
+
+[Timer]
+OnBootSec=90s
+OnCalendar=*-*-* *:00,15,30,45:00
+Persistent=true
+AccuracySec=5s
+Unit=codex-usage.service
+
+[Install]
+WantedBy=timers.target
