@@ -272,6 +272,11 @@ def sample(directory, explicit=None):
             destination.flush()
             os.fsync(destination.fileno())
         os.replace(temporary, directory / 'usage.csv')
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
         print(f"{'Recorded usage' if success else 'Recorded error'} at {utc(now)}")
         return 0 if success else 1
 

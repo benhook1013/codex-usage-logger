@@ -46,12 +46,17 @@ def install(home, codex_home, sqlite_home=None):
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, environment)
+        directory_fd = os.open(config, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-home', type=Path,
                         default=Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))),
@@ -59,7 +64,7 @@ def main():
     parser.add_argument('--sqlite-home', type=Path,
                         default=os.environ.get('CODEX_SQLITE_HOME'),
                         help='Existing Linux Codex database directory; defaults to CODEX_SQLITE_HOME when set')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     install(Path.home(), args.codex_home.expanduser().resolve(),
             args.sqlite_home.expanduser().resolve() if args.sqlite_home else None)
     env = os.environ.copy()
@@ -69,9 +74,13 @@ def main():
     for command in [
         ['systemctl', '--user', 'daemon-reload'],
         ['systemctl', '--user', 'enable', '--now', 'codex-usage.timer'],
-        ['systemctl', '--user', 'start', 'codex-usage.service'],
     ]:
         subprocess.run(command, check=True, env=env)
+    first = subprocess.run(['systemctl', '--user', 'start', 'codex-usage.service'],
+                           check=False, env=env)
+    if first.returncode != 0:
+        print('Installed and timer enabled, but the first reading failed. '
+              'Check: ~/.local/bin/codex-usage --status and codex login status')
     print('Enabled: readings every 15 minutes, plus startup.')
     print('Live source:', ROOT / 'src/codex_usage.py')
     print('View history: ~/.local/bin/codex-usage --status')

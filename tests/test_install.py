@@ -1,4 +1,9 @@
+from contextlib import redirect_stdout
+import io
+import os
 from pathlib import Path
+import stat
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -95,6 +100,64 @@ class InstallTests(unittest.TestCase):
             install.install(home, home / 'profile', home / 'linux-sqlite')
             environment = (home / '.config/codex-usage/environment').read_text()
             self.assertIn('CODEX_SQLITE_HOME="' + str(home / 'linux-sqlite') + '"', environment)
+
+    def test_environment_directory_is_synced_after_replacement(self):
+        sync = os.fsync
+        synced = []
+        with tempfile.TemporaryDirectory() as name:
+            home = Path(name)
+            environment = home / '.config/codex-usage/environment'
+
+            def observe_sync(fd):
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    self.assertIn(str(home / 'profile'), environment.read_text())
+                    self.assertEqual(os.fstat(fd).st_ino, environment.parent.stat().st_ino)
+                    synced.append('directory')
+                else:
+                    synced.append('file')
+                sync(fd)
+
+            with patch.object(install.os, 'fsync', side_effect=observe_sync):
+                install.install(home, home / 'profile')
+            self.assertEqual(synced, ['file', 'directory'])
+
+    def test_initial_read_failure_preserves_installation_and_shows_guidance(self):
+        for returncode in [0, 1]:
+            with self.subTest(returncode=returncode), tempfile.TemporaryDirectory() as name:
+                home = Path(name)
+                output = io.StringIO()
+                results = [subprocess.CompletedProcess([], code) for code in [0, 0, returncode]]
+                with patch.object(Path, 'home', return_value=home), \
+                        patch.object(install.subprocess, 'run', side_effect=results) as run, \
+                        redirect_stdout(output):
+                    install.main(['--codex-home', str(home / 'profile')])
+                self.assertTrue((home / '.local/bin/codex-usage').is_symlink())
+                self.assertTrue((home / '.config/codex-usage/environment').exists())
+                calls = run.call_args_list
+                self.assertEqual(len(calls), 3)
+                self.assertEqual(calls[0].args[0][-1], 'daemon-reload')
+                self.assertTrue(calls[0].kwargs['check'])
+                self.assertEqual(calls[1].args[0][-1], 'codex-usage.timer')
+                self.assertTrue(calls[1].kwargs['check'])
+                self.assertEqual(calls[2].args[0][-1], 'codex-usage.service')
+                self.assertFalse(calls[2].kwargs['check'])
+                self.assertIn('Enabled: readings every 15 minutes', output.getvalue())
+                self.assertEqual('first reading failed' in output.getvalue(), returncode != 0)
+                if returncode:
+                    self.assertIn('codex-usage --status', output.getvalue())
+                    self.assertIn('codex login status', output.getvalue())
+
+    def test_service_setup_errors_still_stop_before_sampling(self):
+        for failed_step in [0, 1]:
+            with self.subTest(failed_step=failed_step), tempfile.TemporaryDirectory() as name:
+                home = Path(name)
+                results = [subprocess.CompletedProcess([], 0)] * failed_step
+                results.append(subprocess.CalledProcessError(1, ['systemctl']))
+                with patch.object(Path, 'home', return_value=home), \
+                        patch.object(install.subprocess, 'run', side_effect=results) as run, \
+                        redirect_stdout(io.StringIO()), self.assertRaises(subprocess.CalledProcessError):
+                    install.main(['--codex-home', str(home / 'profile')])
+                self.assertEqual(run.call_count, failed_step + 1)
 
 
 if __name__ == '__main__':

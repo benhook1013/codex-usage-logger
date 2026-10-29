@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -151,6 +153,48 @@ sys.stdin.read()
             self.assertEqual(len(logger.load_history(directory)), 2)
             self.assertFalse((directory / '.usage.csv.tmp').exists())
             self.assertLessEqual((directory / 'usage.csv').stat().st_size, logger.MAX_BYTES)
+
+    def test_history_directory_is_synced_after_replacement(self):
+        sync = os.fsync
+        synced = []
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+
+            def observe_sync(fd):
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    self.assertEqual(os.fstat(fd).st_ino, directory.stat().st_ino)
+                    self.assertEqual(len(logger.load_history(directory)), 1)
+                    self.assertFalse((directory / '.usage.csv.tmp').exists())
+                    synced.append('directory')
+                else:
+                    synced.append('file')
+                sync(fd)
+
+            with patch.object(logger, 'read_limits', return_value=self.response), \
+                    patch.object(logger.os, 'fsync', side_effect=observe_sync):
+                self.assertEqual(logger.sample(directory), 0)
+            self.assertEqual(synced, ['file', 'directory'])
+
+    def test_failed_directory_sync_closes_descriptor_and_reports_failure(self):
+        sync = os.fsync
+        descriptors = []
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+
+            def fail_directory_sync(fd):
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    descriptors.append(fd)
+                    raise OSError('injected directory sync failure')
+                sync(fd)
+
+            with patch.object(logger, 'read_limits', return_value=self.response), \
+                    patch.object(logger.os, 'fsync', side_effect=fail_directory_sync), \
+                    self.assertRaisesRegex(OSError, 'directory sync failure'):
+                logger.sample(directory)
+            self.assertEqual(len(descriptors), 1)
+            with self.assertRaises(OSError):
+                os.fstat(descriptors[0])
+            self.assertEqual(len(logger.load_history(directory)), 1)
 
 
 if __name__ == '__main__':

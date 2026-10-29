@@ -15,6 +15,8 @@ python3 install.py
 
 The installer links the service and command directly to this checkout. Keep it on disk. It preserves the current `CODEX_HOME` and `CODEX_SQLITE_HOME` paths; override them with `--codex-home` and `--sqlite-home`. A Windows login shared with WSL should use the same Linux database directory as the working CLI.
 
+If the first reading fails, installation stays enabled and shows status/login guidance; later scheduled readings can recover after the underlying problem is fixed.
+
 History lives at `~/.local/share/codex-usage/usage.csv`. Retention is **90 days, 10,000 rows, or 10 MiB**, whichever removes old readings first. Atomic writes can temporarily use another 10 MiB. No separate debug log or backup collection is kept. The CLI reuses its existing Codex profile/database; its diagnostic logging is disabled for scheduled reads. Codex manages its own profile storage, and systemd manages its shared journal.
 
 The timer resumes when WSL starts. It cannot sample while WSL is stopped or Windows is asleep, and does not launch WSL at Windows startup. For operation without a login session, enable user lingering with `loginctl enable-linger "$USER"` if needed.
