@@ -137,27 +137,51 @@ class InstallTests(unittest.TestCase):
                 self.assertEqual(len(calls), 3)
                 self.assertEqual(calls[0].args[0][-1], 'daemon-reload')
                 self.assertTrue(calls[0].kwargs['check'])
+                self.assertEqual(calls[0].kwargs['timeout'], 60)
                 self.assertEqual(calls[1].args[0][-1], 'codex-usage.timer')
                 self.assertTrue(calls[1].kwargs['check'])
+                self.assertEqual(calls[1].kwargs['timeout'], 60)
                 self.assertEqual(calls[2].args[0][-1], 'codex-usage.service')
                 self.assertFalse(calls[2].kwargs['check'])
+                self.assertEqual(calls[2].kwargs['timeout'], 90)
                 self.assertIn('Enabled: readings every 15 minutes', output.getvalue())
                 self.assertEqual('first reading failed' in output.getvalue(), returncode != 0)
                 if returncode:
                     self.assertIn('codex-usage --status', output.getvalue())
                     self.assertIn('codex login status', output.getvalue())
 
+    def test_initial_read_timeout_preserves_installation_and_shows_guidance(self):
+        with tempfile.TemporaryDirectory() as name:
+            home = Path(name)
+            output = io.StringIO()
+            results = [subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0),
+                       subprocess.TimeoutExpired(['systemctl', '--user', 'start', 'codex-usage.service'], 90)]
+            with patch.object(Path, 'home', return_value=home), \
+                    patch.object(install.subprocess, 'run', side_effect=results) as run, \
+                    redirect_stdout(output):
+                install.main(['--codex-home', str(home / 'profile')])
+            self.assertEqual(run.call_args.kwargs['timeout'], 90)
+            self.assertTrue((home / '.local/bin/codex-usage').is_symlink())
+            self.assertTrue((home / '.config/codex-usage/environment').exists())
+            self.assertIn('failed or timed out', output.getvalue())
+            self.assertIn('codex-usage --status', output.getvalue())
+            self.assertIn('codex login status', output.getvalue())
+            self.assertIn('Enabled: readings every 15 minutes', output.getvalue())
+
     def test_service_setup_errors_still_stop_before_sampling(self):
         for failed_step in [0, 1]:
-            with self.subTest(failed_step=failed_step), tempfile.TemporaryDirectory() as name:
-                home = Path(name)
-                results = [subprocess.CompletedProcess([], 0)] * failed_step
-                results.append(subprocess.CalledProcessError(1, ['systemctl']))
-                with patch.object(Path, 'home', return_value=home), \
-                        patch.object(install.subprocess, 'run', side_effect=results) as run, \
-                        redirect_stdout(io.StringIO()), self.assertRaises(subprocess.CalledProcessError):
-                    install.main(['--codex-home', str(home / 'profile')])
-                self.assertEqual(run.call_count, failed_step + 1)
+            for error in [subprocess.CalledProcessError(1, ['systemctl']),
+                          subprocess.TimeoutExpired(['systemctl'], 60)]:
+                with self.subTest(failed_step=failed_step, error=type(error).__name__), \
+                        tempfile.TemporaryDirectory() as name:
+                    home = Path(name)
+                    results = [subprocess.CompletedProcess([], 0)] * failed_step
+                    results.append(error)
+                    with patch.object(Path, 'home', return_value=home), \
+                            patch.object(install.subprocess, 'run', side_effect=results) as run, \
+                            redirect_stdout(io.StringIO()), self.assertRaises(type(error)):
+                        install.main(['--codex-home', str(home / 'profile')])
+                    self.assertEqual(run.call_count, failed_step + 1)
 
 
 if __name__ == '__main__':

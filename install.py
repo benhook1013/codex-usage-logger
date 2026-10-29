@@ -75,11 +75,14 @@ def main(argv=None):
         ['systemctl', '--user', 'daemon-reload'],
         ['systemctl', '--user', 'enable', '--now', 'codex-usage.timer'],
     ]:
-        subprocess.run(command, check=True, env=env)
-    first = subprocess.run(['systemctl', '--user', 'start', 'codex-usage.service'],
-                           check=False, env=env)
-    if first.returncode != 0:
-        print('Installed and timer enabled, but the first reading failed. '
+        subprocess.run(command, check=True, env=env, timeout=60)
+    try:
+        first_failed = subprocess.run(['systemctl', '--user', 'start', 'codex-usage.service'],
+                                      check=False, env=env, timeout=90).returncode != 0
+    except subprocess.TimeoutExpired:
+        first_failed = True
+    if first_failed:
+        print('Installed and timer enabled, but the first reading failed or timed out. '
               'Check: ~/.local/bin/codex-usage --status and codex login status')
     print('Enabled: readings every 15 minutes, plus startup.')
     print('Live source:', ROOT / 'src/codex_usage.py')
