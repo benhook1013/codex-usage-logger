@@ -46,13 +46,18 @@ def number(value):
 
 
 def codex_command(explicit=None):
-    candidate = explicit or shutil.which('codex')
+    candidate = explicit or os.environ.get('CODEX_USAGE_CODEX') or shutil.which('codex')
     if not candidate:
         candidates = list((Path.home() / '.nvm/versions/node').glob('v*/bin/codex'))
         candidates.sort(key=lambda p: tuple(int(x) for x in p.parents[1].name[1:].split('.')), reverse=True)
         candidate = str(candidates[0]) if candidates else None
     if not candidate:
         raise RuntimeError('Codex executable unavailable; install or repair the Codex CLI')
+    # Keep an npm shim's bin directory on PATH so its node interpreter is found.
+    # Resolving the symlink would instead select node_modules/.../bin.
+    candidate = str(Path(candidate).expanduser().absolute())
+    if not Path(candidate).is_file() or not os.access(candidate, os.X_OK):
+        raise RuntimeError('Configured Codex executable unavailable; rerun install.py --codex with its current path')
     env = os.environ.copy()
     env['PATH'] = str(Path(candidate).absolute().parent) + os.pathsep + env.get('PATH', '/usr/bin:/bin')
     return [candidate, 'app-server', '--listen', 'stdio://', '-c', 'analytics.enabled=false'], env
@@ -123,8 +128,11 @@ def read_limits(explicit=None):
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)
             p.wait(timeout=3)
-        p.stdin.close()
-        p.stdout.close()
+        for stream in (p.stdin, p.stdout):
+            try:
+                stream.close()
+            except OSError:
+                pass
 
 
 def make_rows(result, history, now):

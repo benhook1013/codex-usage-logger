@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from src.codex_usage import codex_command
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -15,8 +17,10 @@ def env_quote(value):
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$') + '"'
 
 
-def install(home, codex_home, sqlite_home=None):
+def install(home, codex_home, sqlite_home=None, codex=None):
+    command, _ = codex_command(codex)
     value = 'CODEX_HOME=' + env_quote(str(codex_home)) + '\n'
+    value += 'CODEX_USAGE_CODEX=' + env_quote(command[0]) + '\n'
     if sqlite_home is not None:
         value += 'CODEX_SQLITE_HOME=' + env_quote(str(sqlite_home)) + '\n'
     links = {
@@ -64,9 +68,10 @@ def main(argv=None):
     parser.add_argument('--sqlite-home', type=Path,
                         default=os.environ.get('CODEX_SQLITE_HOME'),
                         help='Existing Linux Codex database directory; defaults to CODEX_SQLITE_HOME when set')
+    parser.add_argument('--codex', help='Codex executable to preserve for scheduled reads (normally auto-detected)')
     args = parser.parse_args(argv)
     install(Path.home(), args.codex_home.expanduser().resolve(),
-            args.sqlite_home.expanduser().resolve() if args.sqlite_home else None)
+            args.sqlite_home.expanduser().resolve() if args.sqlite_home else None, args.codex)
     env = os.environ.copy()
     # Let systemctl use the user manager's private socket; desktop-inherited
     # session-bus addresses can be stale inside WSL.

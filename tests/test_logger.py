@@ -5,7 +5,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import codex_usage as logger
 
@@ -143,6 +143,52 @@ sys.stdin.read()
 ''')
             fake.chmod(0o700)
             self.assertEqual(logger.read_limits(str(fake)), {'test': True})
+
+    def test_configured_cli_works_with_service_path_and_preserves_shim_directory(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            target = root / 'package/bin/cli.py'
+            target.parent.mkdir(parents=True)
+            target.write_text('''#!/usr/bin/python3
+import json,sys
+for line in sys.stdin:
+    request=json.loads(line)
+    if 'id' in request:
+        print(json.dumps({'id':request['id'], 'result':{'test':True}}), flush=True)
+''')
+            target.chmod(0o700)
+            shim = root / '.volta/bin/codex'
+            shim.parent.mkdir(parents=True)
+            shim.symlink_to(target)
+            with patch.dict(os.environ, {'PATH': '/usr/bin:/bin', 'CODEX_USAGE_CODEX': str(shim)}, clear=True):
+                command, env = logger.codex_command()
+                self.assertEqual(command[0], str(shim))
+                self.assertEqual(env['PATH'].split(os.pathsep)[0], str(shim.parent))
+                self.assertEqual(logger.read_limits(), {'test': True})
+                self.assertEqual(logger.codex_command(str(target))[0][0], str(target))
+                shim.unlink()
+                with self.assertRaisesRegex(RuntimeError, 'Configured Codex executable unavailable'):
+                    logger.codex_command()
+
+    def test_pipe_close_errors_preserve_result_or_original_failure_and_close_both(self):
+        for rejected in [False, True]:
+            with self.subTest(rejected=rejected):
+                process = MagicMock()
+                first = {'id': 1, 'error': {'message': 'private upstream message'}} if rejected else {'id': 1, 'result': {}}
+                replies = [first] if rejected else [first, {'id': 2, 'result': {'test': True}}]
+                process.stdout.readline.side_effect = [json.dumps(reply) + '\n' for reply in replies] + ['']
+                process.stdin.close.side_effect = BrokenPipeError('cleanup error')
+                process.stdout.close.side_effect = OSError('other cleanup error')
+                with patch.object(logger, 'codex_command', return_value=(['codex'], {})), \
+                        patch.object(logger.subprocess, 'Popen', return_value=process), \
+                        patch.object(logger.os, 'killpg'):
+                    if rejected:
+                        with self.assertRaisesRegex(RuntimeError, 'Codex rejected the usage read'):
+                            logger.read_limits()
+                    else:
+                        self.assertEqual(logger.read_limits(), {'test': True})
+                process.stdin.close.assert_called_once()
+                process.stdout.close.assert_called_once()
 
     def test_successful_sample_roundtrip_and_atomic_temp_reused(self):
         with tempfile.TemporaryDirectory() as name:

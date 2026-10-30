@@ -13,7 +13,7 @@ python3 install.py
 
 `list` reads saved history only, defaulting to hourly rows over seven local calendar days. Daily/hourly rows show the last successful observation and its time, remaining percentages, credit balance, reading/error counts, and reset/gap events. Missing data is `-`; these are snapshots, not consumption totals. Use `--days 1` for today or up to `--days 90` for retained history.
 
-The installer links the service and command directly to this checkout. Keep it on disk. It preserves the current `CODEX_HOME` and `CODEX_SQLITE_HOME` paths; override them with `--codex-home` and `--sqlite-home`. A Windows login shared with WSL should use the same Linux database directory as the working CLI.
+The installer links the service and command directly to this checkout. Keep it on disk. It preserves the current `CODEX_HOME` and `CODEX_SQLITE_HOME` paths; override them with `--codex-home` and `--sqlite-home`. It also saves the detected CLI path as `CODEX_USAGE_CODEX`, so scheduled reads can find a shell-managed installation. Use `python3 install.py --codex /absolute/path/to/codex` to select another executable; rerun the installer if that path changes. A Windows login shared with WSL should use the same Linux database directory as the working CLI.
 
 If the first reading fails, installation stays enabled and shows status/login guidance; later scheduled readings can recover after the underlying problem is fixed.
 

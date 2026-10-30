@@ -12,6 +12,12 @@ import install
 
 
 class InstallTests(unittest.TestCase):
+    def setUp(self):
+        self.codex = '/opt/codex/bin/codex'
+        discovery = patch.object(install, 'codex_command', return_value=([self.codex], {}))
+        self.discovery = discovery.start()
+        self.addCleanup(discovery.stop)
+
     def test_installs_links_to_checkout_without_copying_source(self):
         with tempfile.TemporaryDirectory() as name:
             home = Path(name)
@@ -25,6 +31,7 @@ class InstallTests(unittest.TestCase):
                 self.assertEqual((home / destination).resolve(), install.ROOT / source)
             environment = home / '.config/codex-usage/environment'
             self.assertIn('Codex Profile', environment.read_text())
+            self.assertIn('CODEX_USAGE_CODEX="' + self.codex + '"', environment.read_text())
             self.assertEqual(environment.stat().st_mode & 0o777, 0o600)
             install.install(home, home / 'Codex Profile')
 
@@ -90,6 +97,7 @@ class InstallTests(unittest.TestCase):
             install.install(home, home / 'new $ `profile`', home / 'new-sqlite')
             self.assertEqual(environment.read_text(),
                              'CODEX_HOME="' + str(home / 'new \\$ `profile`') + '"\n'
+                             'CODEX_USAGE_CODEX="' + self.codex + '"\n'
                              'CODEX_SQLITE_HOME="' + str(home / 'new-sqlite') + '"\n')
             self.assertEqual(environment.stat().st_mode & 0o777, 0o600)
             self.assertEqual(list(environment.parent.glob('.environment.*')), [])
@@ -100,6 +108,30 @@ class InstallTests(unittest.TestCase):
             install.install(home, home / 'profile', home / 'linux-sqlite')
             environment = (home / '.config/codex-usage/environment').read_text()
             self.assertIn('CODEX_SQLITE_HOME="' + str(home / 'linux-sqlite') + '"', environment)
+
+    def test_explicit_cli_option_is_saved_for_scheduled_reads(self):
+        with tempfile.TemporaryDirectory() as name:
+            home = Path(name)
+            explicit = str(home / '.volta/bin/codex')
+            self.discovery.return_value = ([explicit], {})
+            with patch.object(Path, 'home', return_value=home), \
+                    patch.object(install.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+                    redirect_stdout(io.StringIO()):
+                install.main(['--codex', explicit])
+            self.discovery.assert_called_once_with(explicit)
+            self.assertIn('CODEX_USAGE_CODEX="' + explicit + '"',
+                          (home / '.config/codex-usage/environment').read_text())
+
+    def test_missing_cli_does_not_replace_working_configuration(self):
+        with tempfile.TemporaryDirectory() as name:
+            home = Path(name)
+            install.install(home, home / 'old-profile')
+            environment = home / '.config/codex-usage/environment'
+            original = environment.read_bytes()
+            self.discovery.side_effect = RuntimeError('Codex executable unavailable')
+            with self.assertRaisesRegex(RuntimeError, 'unavailable'):
+                install.install(home, home / 'new-profile')
+            self.assertEqual(environment.read_bytes(), original)
 
     def test_environment_directory_is_synced_after_replacement(self):
         sync = os.fsync
