@@ -77,7 +77,11 @@ def read_limits(explicit=None):
                 if not line or len(line) > 1024 * 1024:
                     messages.put(None)
                     break
-                messages.put(json.loads(line))
+                message = json.loads(line)
+                if not isinstance(message, dict):
+                    messages.put(None)
+                    break
+                messages.put(message)
         except (ValueError, OSError):
             messages.put(None)
 
@@ -104,6 +108,8 @@ def read_limits(explicit=None):
                 if 'error' in reply:
                     # Do not copy arbitrary upstream messages or credentials into logs.
                     raise RuntimeError('Codex rejected the usage read; check codex login status')
+                if 'result' not in reply:
+                    raise RuntimeError('Codex app-server exited or returned invalid protocol data')
                 return reply['result']
             if 'id' in reply and 'method' in reply:
                 p.stdin.write(json.dumps({'id': reply['id'], 'error': {
@@ -195,14 +201,18 @@ def make_rows(result, history, now):
                     row[name + '_consumed_pp'] = str(consumed)
                     row[name + '_rate_pp_hour'] = str(round(consumed * Decimal(3600) / Decimal(str(elapsed)), 4))
             row[name + '_event'] = event
-        credits = bucket.get('credits') or {}
-        balance = number(credits.get('balance'))
-        if credits.get('balance') is not None and balance is None:
+        credit_data = bucket.get('credits')
+        if credit_data is None:
+            credit_data = {}
+        if not isinstance(credit_data, dict):
+            raise ValueError('Invalid credits')
+        balance = number(credit_data.get('balance'))
+        if credit_data.get('balance') is not None and balance is None:
             raise ValueError('Invalid credit balance')
         row['credit_balance'] = str(balance) if balance is not None else ''
         for field, key in [('has_credits', 'hasCredits'), ('unlimited_credits', 'unlimited')]:
-            if isinstance(credits.get(key), bool):
-                row[field] = str(credits[key]).lower()
+            if isinstance(credit_data.get(key), bool):
+                row[field] = str(credit_data[key]).lower()
         row['credit_event'] = 'unavailable' if balance is None else 'first_reading'
         old_balance = number(previous.get('credit_balance')) if comparable else None
         if balance is not None and old_balance is not None:

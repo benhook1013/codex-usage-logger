@@ -122,6 +122,50 @@ class LoggerTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 logger.make_rows(bad, [], self.now)
 
+    def test_malformed_credits_record_fixed_error_instead_of_success_or_zero(self):
+        bucket = self.response['rateLimitsByLimitId']['codex']
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            for bad in ['private upstream text', ['bad'], 1, True, [], '', 0, False]:
+                with self.subTest(credits=bad):
+                    bucket['credits'] = bad
+                    with patch.object(logger, 'read_limits', return_value=self.response):
+                        self.assertEqual(logger.sample(directory), 1)
+                    row = logger.load_history(directory)[-1]
+                    self.assertEqual(row['status'], 'error')
+                    self.assertEqual(row['error'], 'Invalid credits')
+                    self.assertEqual(row['weekly_left_pct'], '')
+                    self.assertEqual(row['credit_balance'], '')
+            for unavailable in [None, {}]:
+                bucket['credits'] = unavailable
+                self.assertEqual(self.rows()[0]['credit_balance'], '')
+            del bucket['credits']
+            self.assertEqual(self.rows()[0]['credit_balance'], '')
+
+    def test_malformed_protocol_replies_record_fixed_error_during_initialize_or_read(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            fake = directory / 'codex'
+            for method, request_id in [('initialize', 1), ('account/rateLimits/read', 2)]:
+                for bad in [[], ['private upstream text'], 'private upstream text', 1, True, None, {'id': request_id}]:
+                    with self.subTest(method=method, reply=bad):
+                        fake.write_text('''#!/usr/bin/python3
+import json,sys
+for line in sys.stdin:
+    request=json.loads(line)
+    if request.get('method') == ''' + repr(method) + ''':
+        print(''' + repr(json.dumps(bad)) + ''', flush=True)
+    elif 'id' in request:
+        print(json.dumps({'id':request['id'], 'result':{}}), flush=True)
+''')
+                        fake.chmod(0o700)
+                        self.assertEqual(logger.sample(directory, str(fake)), 1)
+                        row = logger.load_history(directory)[-1]
+                        self.assertEqual(row['status'], 'error')
+                        self.assertEqual(row['error'], 'Codex app-server exited or returned invalid protocol data')
+                        self.assertEqual(row['weekly_left_pct'], '')
+                        self.assertEqual(row['credit_balance'], '')
+
     def test_protocol_client_only_initializes_and_reads_usage(self):
         with tempfile.TemporaryDirectory() as name:
             fake = Path(name) / 'codex'
