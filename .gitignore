@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+usage.csv
+.usage.csv.tmp
+.lock
+auth.json
+environment
