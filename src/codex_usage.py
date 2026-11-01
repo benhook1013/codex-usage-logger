@@ -143,8 +143,13 @@ def read_limits(explicit=None):
         try:
             p.wait(timeout=3)
         except subprocess.TimeoutExpired:
+            pass
+        # The leader can exit while a native child still holds the pipes open.
+        try:
             os.killpg(p.pid, signal.SIGKILL)
-            p.wait(timeout=3)
+        except ProcessLookupError:
+            pass
+        p.wait(timeout=3)
         for stream in (p.stdin, p.stdout):
             try:
                 stream.close()

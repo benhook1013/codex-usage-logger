@@ -2,7 +2,10 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import signal
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -278,6 +281,43 @@ for line in sys.stdin:
             self.assertEqual(row['error'], 'Codex app-server exited or returned invalid protocol data')
             self.assertEqual(row['weekly_left_pct'], '')
             self.assertEqual(row['credit_balance'], '')
+
+    def test_cleanup_kills_term_ignoring_child_after_leader_exits(self):
+        """Bound cleanup when an exited CLI leaves a child holding the stdout pipe open."""
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            fake = directory / 'codex'
+            group_file = directory / 'group'
+            ready = directory / 'ready'
+            child_code = ('import signal,time; from pathlib import Path; '
+                          'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                          f'Path({str(ready)!r}).touch(); time.sleep(30)')
+            fake.write_text('''#!/usr/bin/python3
+import json,os,subprocess,sys,time
+from pathlib import Path
+''' + f'Path({str(group_file)!r}).write_text(str(os.getpid()))\n' +
+                            f'subprocess.Popen([sys.executable, "-c", {child_code!r}])\n' +
+                            f'while not Path({str(ready)!r}).exists(): time.sleep(0.01)\n' + '''
+for line in sys.stdin:
+    request=json.loads(line)
+    if 'id' in request:
+        print(json.dumps({'id':request['id'], 'result':{'test':True}}), flush=True)
+''')
+            fake.chmod(0o700)
+            try:
+                result = subprocess.run(
+                    [sys.executable, '-c', 'import codex_usage as logger; import sys; '
+                     'print(logger.read_limits(sys.argv[1]))', str(fake)],
+                    env={**os.environ, 'PYTHONPATH': str(Path(logger.__file__).parent)},
+                    capture_output=True, text=True, timeout=8, check=True)
+                self.assertIn("'test': True", result.stdout)
+            finally:
+                # Clean up the fixture even if the regression makes the client hang.
+                if group_file.exists():
+                    try:
+                        os.killpg(int(group_file.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_successful_sample_roundtrip_and_atomic_temp_reused(self):
         with tempfile.TemporaryDirectory() as name:
