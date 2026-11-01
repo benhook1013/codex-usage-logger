@@ -88,12 +88,18 @@ def read_limits(explicit=None):
     threading.Thread(target=receive, daemon=True).start()
     deadline = time.monotonic() + 45
 
+    def send(message):
+        try:
+            p.stdin.write(json.dumps(message) + '\n')
+            p.stdin.flush()
+        except OSError:
+            raise RuntimeError('Codex app-server exited or returned invalid protocol data') from None
+
     def request(request_id, method, params=None):
         message = {'id': request_id, 'method': method}
         if params is not None:
             message['params'] = params
-        p.stdin.write(json.dumps(message) + '\n')
-        p.stdin.flush()
+        send(message)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -112,15 +118,13 @@ def read_limits(explicit=None):
                     raise RuntimeError('Codex app-server exited or returned invalid protocol data')
                 return reply['result']
             if 'id' in reply and 'method' in reply:
-                p.stdin.write(json.dumps({'id': reply['id'], 'error': {
-                    'code': -32601, 'message': 'Read-only logger does not handle requests'}}) + '\n')
-                p.stdin.flush()
+                send({'id': reply['id'], 'error': {
+                    'code': -32601, 'message': 'Read-only logger does not handle requests'}})
 
     try:
         request(1, 'initialize', {'clientInfo': {
             'name': 'codex_usage_logger', 'title': 'Local usage logger', 'version': '1.0.0'}})
-        p.stdin.write('{"method":"initialized"}\n')
-        p.stdin.flush()
+        send({'method': 'initialized'})
         return request(2, 'account/rateLimits/read')
     finally:
         # The npm entry point starts a native child. Stop their entire process

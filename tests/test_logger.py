@@ -234,6 +234,45 @@ for line in sys.stdin:
                 process.stdin.close.assert_called_once()
                 process.stdout.close.assert_called_once()
 
+    def test_pipe_write_and_flush_failures_record_fixed_error_for_every_message(self):
+        for operation in ['write', 'flush']:
+            # Initialize, reject a server request, initialized, usage read.
+            for failed_send in range(1, 5):
+                with self.subTest(operation=operation, failed_send=failed_send), \
+                        tempfile.TemporaryDirectory() as name:
+                    process = MagicMock()
+                    replies = [{'id': 99, 'method': 'unexpected/request'},
+                               {'id': 1, 'result': {}}, {'id': 2, 'result': self.response}]
+                    process.stdout.readline.side_effect = [json.dumps(reply) + '\n' for reply in replies] + ['']
+                    getattr(process.stdin, operation).side_effect = (
+                        [None] * (failed_send - 1) + [BrokenPipeError('private upstream detail')])
+                    directory = Path(name)
+                    with patch.object(logger, 'codex_command', return_value=(['codex'], {})), \
+                            patch.object(logger.subprocess, 'Popen', return_value=process), \
+                            patch.object(logger.os, 'killpg'):
+                        self.assertEqual(logger.sample(directory), 1)
+                    row = logger.load_history(directory)[0]
+                    self.assertEqual(row['status'], 'error')
+                    self.assertEqual(row['error'], 'Codex app-server exited or returned invalid protocol data')
+                    self.assertEqual(row['weekly_left_pct'], '')
+                    self.assertEqual(row['credit_balance'], '')
+                    self.assertEqual(getattr(process.stdin, operation).call_count, failed_send)
+                    process.stdin.close.assert_called_once()
+                    process.stdout.close.assert_called_once()
+
+    def test_immediately_exiting_executable_records_fixed_protocol_error(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            fake = directory / 'codex'
+            fake.write_text('#!/usr/bin/python3\nraise SystemExit(1)\n')
+            fake.chmod(0o700)
+            self.assertEqual(logger.sample(directory, str(fake)), 1)
+            row = logger.load_history(directory)[0]
+            self.assertEqual(row['status'], 'error')
+            self.assertEqual(row['error'], 'Codex app-server exited or returned invalid protocol data')
+            self.assertEqual(row['weekly_left_pct'], '')
+            self.assertEqual(row['credit_balance'], '')
+
     def test_successful_sample_roundtrip_and_atomic_temp_reused(self):
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
