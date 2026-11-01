@@ -24,6 +24,7 @@ class HistoryTests(unittest.TestCase):
         time.tzset()
 
     def row(self, timestamp, weekly='70', status='ok', bucket='codex', event='same_window'):
+        """Build a saved observation fixture with missing allowance and credit fields for errors."""
         row = dict.fromkeys(logger.FIELDS, '')
         row.update(timestamp_utc=timestamp, status=status, limit_id=bucket,
                    weekly_left_pct=weekly if status == 'ok' else '',
@@ -37,6 +38,7 @@ class HistoryTests(unittest.TestCase):
         return output.getvalue()
 
     def test_hourly_uses_latest_success_not_error_or_average(self):
+        """Ensure a later failure cannot hide the latest successful snapshot or period events."""
         rows = [self.row('2026-10-19T09:00:00+00:00', '70'),
                 self.row('2026-10-19T09:15:00+00:00', '60', event='reset_timestamp_changed'),
                 self.row('2026-10-19T09:30:00+00:00', status='error')]
@@ -52,6 +54,7 @@ class HistoryTests(unittest.TestCase):
         self.assertRegex(data, r'\s2\s+1\s')
 
     def test_daily_groups_by_local_day_and_filters_calendar_days(self):
+        """Verify UTC readings group and filter by New Zealand calendar dates."""
         rows = [self.row('2026-10-19T10:00:00+00:00', '70'),
                 self.row('2026-10-19T11:00:00+00:00', '50'),
                 self.row('2026-10-19T12:00:00+00:00', '40')]
@@ -64,12 +67,14 @@ class HistoryTests(unittest.TestCase):
         self.assertIn('No readings', self.render(rows, 'day', 1))
 
     def test_error_only_period_is_visible_without_fake_zero(self):
+        """Keep failed-read periods visible without implying a measured zero allowance."""
         output = self.render([self.row('2026-10-19T09:00:00+00:00', status='error')])
         data = next(line for line in output.splitlines() if line.startswith('2026-'))
         self.assertNotIn('%', data)
         self.assertRegex(data, r'\s0\s+1\s')
 
     def test_zero_allowance_and_multiple_buckets_remain_distinct(self):
+        """Preserve genuine zero percentages and separate rows for independent buckets."""
         output = self.render([self.row('2026-10-19T09:00:00+00:00', '0'),
                               self.row('2026-10-19T09:00:00+00:00', '75', bucket='other')])
         data = [line for line in output.splitlines() if line.startswith('2026-')]
@@ -96,6 +101,7 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
 
     def test_invalid_history_options_do_not_accidentally_sample(self):
+        """Reject invalid viewing options before they can trigger a live reading."""
         with patch.object(logger, 'sample', side_effect=AssertionError('Must not sample')), redirect_stderr(io.StringIO()):
             for args in [['--day'], ['list', '--day', '--hour'], ['list', '--days', '0'],
                          ['list', '--days', '91'], ['list', '--status']]:

@@ -19,6 +19,7 @@ class InstallTests(unittest.TestCase):
         self.addCleanup(discovery.stop)
 
     def test_installs_links_to_checkout_without_copying_source(self):
+        """Verify repeat installation keeps live source links and a private executable configuration."""
         with tempfile.TemporaryDirectory() as name:
             home = Path(name)
             install.install(home, home / 'Codex Profile')
@@ -52,6 +53,7 @@ class InstallTests(unittest.TestCase):
             install.env_quote('bad\npath')
 
     def test_failed_environment_updates_preserve_existing_file_and_clean_up(self):
+        """Inject partial writes, flush errors, and rename failures without losing prior configuration."""
         factory = tempfile.NamedTemporaryFile
         for failure in ['write', 'flush', 'replace']:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as name:
@@ -62,6 +64,7 @@ class InstallTests(unittest.TestCase):
                 original = environment.read_bytes()
 
                 def temporary_file(*args, **kwargs):
+                    """Create a real temporary file and inject the selected write or flush failure."""
                     output = factory(*args, **kwargs)
                     write = output.write
 
@@ -134,6 +137,7 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(environment.read_bytes(), original)
 
     def test_environment_directory_is_synced_after_replacement(self):
+        """Check that file contents and the renamed directory entry are synced in order."""
         sync = os.fsync
         synced = []
         with tempfile.TemporaryDirectory() as name:
@@ -141,6 +145,7 @@ class InstallTests(unittest.TestCase):
             environment = home / '.config/codex-usage/environment'
 
             def observe_sync(fd):
+                """Check the replaced configuration and containing directory before recording a real fsync."""
                 if stat.S_ISDIR(os.fstat(fd).st_mode):
                     self.assertIn(str(home / 'profile'), environment.read_text())
                     self.assertEqual(os.fstat(fd).st_ino, environment.parent.stat().st_ino)
@@ -154,6 +159,7 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(synced, ['file', 'directory'])
 
     def test_initial_read_failure_preserves_installation_and_shows_guidance(self):
+        """Keep timer setup intact and show recovery guidance when the initial service read fails."""
         for returncode in [0, 1]:
             with self.subTest(returncode=returncode), tempfile.TemporaryDirectory() as name:
                 home = Path(name)
@@ -201,6 +207,7 @@ class InstallTests(unittest.TestCase):
             self.assertIn('Enabled: readings every 15 minutes', output.getvalue())
 
     def test_service_setup_errors_still_stop_before_sampling(self):
+        """Require timer setup errors and timeouts to stop installation before the first read."""
         for failed_step in [0, 1]:
             for error in [subprocess.CalledProcessError(1, ['systemctl']),
                           subprocess.TimeoutExpired(['systemctl'], 60)]:

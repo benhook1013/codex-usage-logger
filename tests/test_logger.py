@@ -21,6 +21,7 @@ class LoggerTests(unittest.TestCase):
             'unlimited': False, 'balance': '123.456789'}}}}
 
     def rows(self, response=None, history=None, now=None):
+        """Build quota rows using the standard fixture unless response, history, or time is supplied."""
         return logger.make_rows(response or self.response, history or [], now or self.now)
 
     def test_weekly_primary_and_missing_five_hour(self):
@@ -118,11 +119,13 @@ class LoggerTests(unittest.TestCase):
         self.assertEqual(row['five_hour_left_pct'], '88')
 
     def test_invalid_response_records_no_success(self):
+        """Reject absent buckets and invalid percentages instead of constructing successful readings."""
         for bad in [None, {}, {'rateLimits': {'primary': {'usedPercent': 'NaN', 'windowDurationMins': 10080}}}]:
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 logger.make_rows(bad, [], self.now)
 
     def test_malformed_credits_record_fixed_error_instead_of_success_or_zero(self):
+        """Reject non-object credits while accepting absent, null, or empty objects as unavailable."""
         bucket = self.response['rateLimitsByLimitId']['codex']
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
@@ -143,6 +146,7 @@ class LoggerTests(unittest.TestCase):
             self.assertEqual(self.rows()[0]['credit_balance'], '')
 
     def test_malformed_protocol_replies_record_fixed_error_during_initialize_or_read(self):
+        """Exercise bad reply shapes and missing results through saved errors at both RPC stages."""
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
             fake = directory / 'codex'
@@ -215,6 +219,7 @@ for line in sys.stdin:
                     logger.codex_command()
 
     def test_pipe_close_errors_preserve_result_or_original_failure_and_close_both(self):
+        """Ensure cleanup failures neither change the RPC outcome nor skip closing the other pipe."""
         for rejected in [False, True]:
             with self.subTest(rejected=rejected):
                 process = MagicMock()
@@ -235,6 +240,7 @@ for line in sys.stdin:
                 process.stdout.close.assert_called_once()
 
     def test_pipe_write_and_flush_failures_record_fixed_error_for_every_message(self):
+        """Inject errors at every outbound message and verify fixed diagnostics and pipe cleanup."""
         for operation in ['write', 'flush']:
             # Initialize, reject a server request, initialized, usage read.
             for failed_send in range(1, 5):
@@ -284,12 +290,14 @@ for line in sys.stdin:
             self.assertLessEqual((directory / 'usage.csv').stat().st_size, logger.MAX_BYTES)
 
     def test_history_directory_is_synced_after_replacement(self):
+        """Verify durable-write ordering after the new history replaces its temporary file."""
         sync = os.fsync
         synced = []
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
 
             def observe_sync(fd):
+                """Observe the new history and consumed temporary file before syncing its directory."""
                 if stat.S_ISDIR(os.fstat(fd).st_mode):
                     self.assertEqual(os.fstat(fd).st_ino, directory.stat().st_ino)
                     self.assertEqual(len(logger.load_history(directory)), 1)
@@ -305,12 +313,14 @@ for line in sys.stdin:
             self.assertEqual(synced, ['file', 'directory'])
 
     def test_failed_directory_sync_closes_descriptor_and_reports_failure(self):
+        """Propagate a directory sync failure while closing its descriptor and retaining the replaced CSV."""
         sync = os.fsync
         descriptors = []
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
 
             def fail_directory_sync(fd):
+                """Fail directory syncing after allowing the temporary file contents to reach fsync."""
                 if stat.S_ISDIR(os.fstat(fd).st_mode):
                     descriptors.append(fd)
                     raise OSError('injected directory sync failure')

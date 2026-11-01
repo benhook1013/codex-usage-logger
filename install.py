@@ -12,12 +12,14 @@ ROOT = Path(__file__).resolve().parent
 
 
 def env_quote(value):
+    """Quote a path for systemd EnvironmentFile syntax, rejecting line breaks and nulls."""
     if any(c in value for c in '\n\r\0'):
         raise ValueError('Environment paths cannot contain newlines or null bytes')
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$') + '"'
 
 
 def install(home, codex_home, sqlite_home=None, codex=None):
+    """Link this checkout and atomically save private profile and CLI paths; preserve regular files."""
     command, _ = codex_command(codex)
     value = 'CODEX_HOME=' + env_quote(str(codex_home)) + '\n'
     value += 'CODEX_USAGE_CODEX=' + env_quote(command[0]) + '\n'
@@ -61,6 +63,7 @@ def install(home, codex_home, sqlite_home=None, codex=None):
 
 
 def main(argv=None):
+    """Enable the timer and attempt a bounded first read, reporting read failures without undoing setup."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-home', type=Path,
                         default=Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))),

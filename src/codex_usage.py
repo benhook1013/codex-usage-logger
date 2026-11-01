@@ -32,10 +32,12 @@ FIELDS = ['timestamp_utc', 'timestamp_local', 'status', 'error', 'limit_id',
 
 
 def utc(dt):
+    """Format an aware datetime in UTC with whole-second precision."""
     return dt.astimezone(timezone.utc).isoformat(timespec='seconds')
 
 
 def number(value):
+    """Return a finite Decimal, or None for missing, boolean, or invalid numeric values."""
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -46,6 +48,7 @@ def number(value):
 
 
 def codex_command(explicit=None):
+    """Choose an explicit, configured, or detected CLI and preserve its shim directory on PATH."""
     candidate = explicit or os.environ.get('CODEX_USAGE_CODEX') or shutil.which('codex')
     if not candidate:
         candidates = list((Path.home() / '.nvm/versions/node').glob('v*/bin/codex'))
@@ -64,6 +67,7 @@ def codex_command(explicit=None):
 
 
 def read_limits(explicit=None):
+    """Initialize a read-only app-server, read quotas, and clean up its process group and pipes."""
     command, env = codex_command(explicit)
     p = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, text=True, env=env, cwd=Path.home(),
@@ -71,6 +75,7 @@ def read_limits(explicit=None):
     messages = queue.Queue(maxsize=32)
 
     def receive():
+        """Queue JSON objects from bounded protocol lines; signal EOF or malformed data with None."""
         try:
             while True:
                 line = p.stdout.readline(1024 * 1024 + 1)
@@ -89,6 +94,7 @@ def read_limits(explicit=None):
     deadline = time.monotonic() + 45
 
     def send(message):
+        """Write and flush one JSON message, translating pipe errors into a fixed diagnostic."""
         try:
             p.stdin.write(json.dumps(message) + '\n')
             p.stdin.flush()
@@ -96,6 +102,7 @@ def read_limits(explicit=None):
             raise RuntimeError('Codex app-server exited or returned invalid protocol data') from None
 
     def request(request_id, method, params=None):
+        """Await a matching reply within the shared deadline, rejecting unsupported server requests."""
         message = {'id': request_id, 'method': method}
         if params is not None:
             message['params'] = params
@@ -146,6 +153,7 @@ def read_limits(explicit=None):
 
 
 def make_rows(result, history, now):
+    """Validate quota buckets and derive rows, comparing only matching plans and allowance windows."""
     if not isinstance(result, dict):
         raise ValueError('Invalid usage response')
     encoded = json.dumps(result, separators=(',', ':'), ensure_ascii=True)
@@ -231,6 +239,7 @@ def make_rows(result, history, now):
 
 
 def encode_rows(rows):
+    """Encode history as UTF-8 CSV with the canonical field order and header."""
     buffer = io.StringIO(newline='')
     writer = csv.DictWriter(buffer, fieldnames=FIELDS)
     writer.writeheader()
@@ -239,6 +248,7 @@ def encode_rows(rows):
 
 
 def retain(rows, now):
+    """Keep the newest rows within age, count, and byte limits; return rows and encoded CSV."""
     cutoff = now - timedelta(days=MAX_AGE_DAYS)
     rows = [r for r in rows if datetime.fromisoformat(r['timestamp_utc']) >= cutoff][-MAX_ROWS:]
     encoded = encode_rows(rows)
@@ -256,6 +266,7 @@ def retain(rows, now):
 
 
 def load_history(directory):
+    """Read bounded CSV history, returning an empty list if absent and rejecting schema drift."""
     path = directory / 'usage.csv'
     if not path.exists():
         return []
@@ -270,6 +281,7 @@ def load_history(directory):
 
 
 def sample(directory, explicit=None):
+    """Save one reading or sanitized error under a lock, trim history, and return its exit status."""
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (directory / '.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -304,6 +316,7 @@ def sample(directory, explicit=None):
 
 
 def status(directory):
+    """Print the latest saved reading and retention limits without contacting Codex."""
     history = load_history(directory)
     if not history:
         print('No readings yet.')
@@ -326,6 +339,7 @@ def status(directory):
 
 
 def list_history(directory, period='hour', days=7, now=None):
+    """Print the last success per local day or hour, retaining error counts and distinct DST hours."""
     now = now or datetime.now(timezone.utc)
     first_day = now.astimezone().date() - timedelta(days=days - 1)
     groups = {}
@@ -358,6 +372,7 @@ def list_history(directory, period='hour', days=7, now=None):
         for limit_id, bucket in sorted(group['buckets'].items()) or [('-', None)]:
             row = bucket['row'] if bucket else {}
             def percentage(key):
+                """Render a saved percentage, preserving real zero and marking missing values with a dash."""
                 value = row.get(key, '')
                 return value + '%' if value else '-'
             table.append([label, limit_id, bucket['time'] if bucket else '-',
@@ -374,6 +389,7 @@ def list_history(directory, period='hour', days=7, now=None):
 
 
 def history_days(value):
+    """Parse a whole-number calendar-day count within the supported retention range."""
     try:
         days = int(value)
     except ValueError:
@@ -384,6 +400,7 @@ def history_days(value):
 
 
 def main(argv=None):
+    """Dispatch validated CLI options to saved-history views or the default scheduled sample."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', nargs='?', choices=['list'], help='List saved history without a network request')
     parser.add_argument('--status', action='store_true', help='Show the latest saved reading without a network request')
