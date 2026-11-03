@@ -127,6 +127,31 @@ class LoggerTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 logger.make_rows(bad, [], self.now)
 
+    def test_out_of_range_reset_timestamps_record_fixed_error(self):
+        """Reject numeric timestamps beyond platform or datetime limits without recording a fake success."""
+        for reset in (1e20, -1e20, 253402300800, -62135596801, 10 ** 400):
+            with self.subTest(reset=reset), tempfile.TemporaryDirectory() as name:
+                directory = Path(name)
+                self.response['rateLimitsByLimitId']['codex']['primary']['resetsAt'] = reset
+                with patch.object(logger, 'read_limits', return_value=self.response):
+                    self.assertEqual(logger.sample(directory), 1)
+                row = logger.load_history(directory)[0]
+                self.assertEqual(row['error'], 'Invalid reset timestamp')
+                self.assertEqual(row['status'], 'error')
+                self.assertEqual(row['weekly_left_pct'], '')
+                self.assertEqual(row['weekly_reset_utc'], '')
+
+    def test_reset_conversion_failures_do_not_expose_platform_messages(self):
+        """Normalize each platform-specific conversion exception to the same saved diagnostic."""
+        for error in (OverflowError, OSError, ValueError):
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as name:
+                directory = Path(name)
+                with patch.object(logger, 'read_limits', return_value=self.response), \
+                        patch.object(logger, 'datetime', wraps=datetime) as clock:
+                    clock.fromtimestamp.side_effect = error('private platform detail')
+                    self.assertEqual(logger.sample(directory), 1)
+                self.assertEqual(logger.load_history(directory)[0]['error'], 'Invalid reset timestamp')
+
     def test_malformed_credits_record_fixed_error_instead_of_success_or_zero(self):
         """Reject non-object credits while accepting absent, null, or empty objects as unavailable."""
         bucket = self.response['rateLimitsByLimitId']['codex']

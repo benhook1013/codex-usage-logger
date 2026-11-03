@@ -197,9 +197,12 @@ def make_rows(result, history, now):
             row[name + '_left_pct'] = str(100 - used)
             reset = window.get('resetsAt')
             if reset is not None:
-                if isinstance(reset, bool) or not isinstance(reset, (int, float)) or not math.isfinite(reset):
-                    raise ValueError('Invalid reset timestamp')
-                row[name + '_reset_utc'] = utc(datetime.fromtimestamp(reset, timezone.utc))
+                try:
+                    if isinstance(reset, bool) or not isinstance(reset, (int, float)) or not math.isfinite(reset):
+                        raise ValueError('Invalid reset timestamp')
+                    row[name + '_reset_utc'] = utc(datetime.fromtimestamp(reset, timezone.utc))
+                except (OverflowError, OSError, ValueError):
+                    raise ValueError('Invalid reset timestamp') from None
             event = 'first_reading'
             old_left = number(previous.get(name + '_left_pct')) if comparable else None
             if old_left is not None:
