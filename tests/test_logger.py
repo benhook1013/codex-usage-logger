@@ -94,6 +94,23 @@ class LoggerTests(unittest.TestCase):
         self.assertEqual(row['credit_event'], 'balance_increased')
         self.assertEqual(row['credit_consumed'], '')
 
+    def test_history_utf8_round_trip_under_ascii_locale(self):
+        row = dict.fromkeys(logger.FIELDS, '')
+        row.update(plan='caf\u00e9', limit_id='\u65e5\u672c', limit_reached_type='limite d\u00e9pass\u00e9e')
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / 'usage.csv').write_bytes(logger.encode_rows([row]))
+            script = (
+                'import locale, pathlib, sys; import codex_usage as logger; '
+                'assert locale.getpreferredencoding(False).lower() in ("ansi_x3.4-1968", "ascii"); '
+                'row = logger.load_history(pathlib.Path(sys.argv[1]))[0]; '
+                f'assert row == {ascii(row)}'
+            )
+            environment = dict(os.environ, LC_ALL='C', PYTHONUTF8='0', PYTHONCOERCECLOCALE='0')
+            result = subprocess.run([sys.executable, '-c', script, name],
+                                    env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_retention_age_rows_and_bytes(self):
         row = self.rows()[0]
         old = dict(row, timestamp_utc=logger.utc(self.now - timedelta(days=91)))

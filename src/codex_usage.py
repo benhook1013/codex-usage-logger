@@ -281,7 +281,7 @@ def load_history(directory):
     if path.stat().st_size > MAX_BYTES:
         raise RuntimeError('History exceeds its size limit; inspect it before continuing')
     csv.field_size_limit(1024 * 1024)
-    with path.open(newline='') as source:
+    with path.open(newline='', encoding='utf-8') as source:
         reader = csv.DictReader(source)
         if reader.fieldnames != FIELDS:
             raise RuntimeError('Unexpected history schema; inspect it before continuing')
