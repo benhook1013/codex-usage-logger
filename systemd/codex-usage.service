@@ -1,0 +1,16 @@
+[Unit]
+Description=Read Codex allowance and credits into bounded local history
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h
+EnvironmentFile=%h/.config/codex-usage/environment
+Environment=RUST_LOG=off
+ExecStart=%h/.local/bin/codex-usage
+TimeoutStartSec=60
+TimeoutStopSec=5
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=null
+StandardError=null
