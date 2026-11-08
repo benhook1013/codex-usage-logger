@@ -13,4 +13,4 @@ KillMode=control-group
 UMask=0077
 NoNewPrivileges=true
 StandardOutput=null
-StandardError=null
+StandardError=journal

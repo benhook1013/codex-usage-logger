@@ -17,7 +17,7 @@ class LoggerTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 10, 19, 9, 0, tzinfo=timezone.utc)
         self.reset = int((self.now + timedelta(days=3)).timestamp())
-        self.response = {'rateLimitsByLimitId': {'codex': {
+        self.response = {'_account_key': 'fixture-account', 'rateLimitsByLimitId': {'codex': {
             'planType': 'prolite', 'primary': {'usedPercent': 25,
             'windowDurationMins': 10080, 'resetsAt': self.reset},
             'secondary': None, 'credits': {'hasCredits': True,
@@ -130,7 +130,7 @@ class LoggerTests(unittest.TestCase):
         rows = self.rows()
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[1]['weekly_left_pct'], '')
-        self.assertEqual(json.loads(rows[0]['response_json']), self.response)
+        self.assertEqual(json.loads(rows[0]['response_json']), {k: v for k, v in self.response.items() if k != '_account_key'})
 
     def test_fallback_single_bucket_and_five_hour_secondary(self):
         bucket = self.response['rateLimitsByLimitId']['codex']

@@ -30,6 +30,8 @@ class InstallTests(unittest.TestCase):
             ]:
                 self.assertTrue((home / destination).is_symlink())
                 self.assertEqual((home / destination).resolve(), install.ROOT / source)
+            launched = subprocess.run([str(home / '.local/bin/codex-usage'), '--help'], capture_output=True, text=True, timeout=5)
+            self.assertEqual(launched.returncode, 0, launched.stderr)
             environment = home / '.config/codex-usage/environment'
             self.assertIn('Codex Profile', environment.read_text())
             self.assertIn('CODEX_USAGE_CODEX="' + self.codex + '"', environment.read_text())

@@ -1,6 +1,10 @@
 #!/usr/bin/python3
 """Bounded local Codex quota history. Uses only read RPCs; never starts a turn."""
 import argparse
+import hashlib
+import re
+import sys
+import uuid
 import csv
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
@@ -21,7 +25,7 @@ DATA = Path.home() / '.local/share/codex-usage'
 MAX_AGE_DAYS = 90
 MAX_ROWS = 10000
 MAX_BYTES = 10 * 1024 * 1024
-FIELDS = ['timestamp_utc', 'timestamp_local', 'status', 'error', 'limit_id',
+FIELDS = ['sample_id', 'account_key', 'timestamp_utc', 'timestamp_local', 'status', 'error', 'limit_id',
           'plan', 'elapsed_minutes', 'sampling_gap',
           'five_hour_left_pct', 'five_hour_reset_utc', 'five_hour_event',
           'five_hour_consumed_pp', 'five_hour_rate_pp_hour',
@@ -29,6 +33,10 @@ FIELDS = ['timestamp_utc', 'timestamp_local', 'status', 'error', 'limit_id',
           'weekly_consumed_pp', 'weekly_rate_pp_hour',
           'credit_balance', 'has_credits', 'unlimited_credits',
           'credit_consumed', 'credit_event', 'limit_reached_type', 'response_json']
+
+
+LEGACY_FIELDS = FIELDS[2:]
+READ_TIMEOUT = 45
 
 
 def utc(dt):
@@ -47,9 +55,24 @@ def number(value):
         return None
 
 
+def installed_environment():
+    """Read only the installer's quoted path settings, without executing shell input."""
+    path = Path.home() / '.config/codex-usage/environment'
+    if not path.exists():
+        return {}
+    result = {}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        match = re.fullmatch(r'(CODEX_HOME|CODEX_SQLITE_HOME|CODEX_USAGE_CODEX)="((?:[^"\\]|\\.)*)"', line)
+        if not match:
+            raise RuntimeError('Invalid installed usage configuration; rerun install.py')
+        result[match[1]] = re.sub(r'\\([\\"$`])', r'\1', match[2])
+    return result
+
+
 def codex_command(explicit=None):
     """Choose an explicit, configured, or detected CLI and preserve its shim directory on PATH."""
-    candidate = explicit or os.environ.get('CODEX_USAGE_CODEX') or shutil.which('codex')
+    configured = installed_environment()
+    candidate = explicit or os.environ.get('CODEX_USAGE_CODEX') or configured.get('CODEX_USAGE_CODEX') or shutil.which('codex')
     if not candidate:
         candidates = list((Path.home() / '.nvm/versions/node').glob('v*/bin/codex'))
         candidates.sort(key=lambda p: tuple(int(x) for x in p.parents[1].name[1:].split('.')), reverse=True)
@@ -61,7 +84,7 @@ def codex_command(explicit=None):
     candidate = str(Path(candidate).expanduser().absolute())
     if not Path(candidate).is_file() or not os.access(candidate, os.X_OK):
         raise RuntimeError('Configured Codex executable unavailable; rerun install.py --codex with its current path')
-    env = os.environ.copy()
+    env = {**configured, **os.environ}
     env['PATH'] = str(Path(candidate).absolute().parent) + os.pathsep + env.get('PATH', '/usr/bin:/bin')
     return [candidate, 'app-server', '--listen', 'stdio://', '-c', 'analytics.enabled=false'], env
 
@@ -70,9 +93,18 @@ def read_limits(explicit=None):
     """Initialize a read-only app-server, read quotas, and clean up its process group and pipes."""
     command, env = codex_command(explicit)
     p = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL, text=True, env=env, cwd=Path.home(),
+                         stderr=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace', env=env, cwd=Path.home(),
                          start_new_session=True)
     messages = queue.Queue(maxsize=32)
+    stopped = threading.Event()
+
+    def enqueue(value):
+        while not stopped.is_set():
+            try:
+                messages.put(value, timeout=0.1)
+                return
+            except queue.Full:
+                pass
 
     def receive():
         """Queue JSON objects from bounded protocol lines; signal EOF or malformed data with None."""
@@ -80,25 +112,35 @@ def read_limits(explicit=None):
             while True:
                 line = p.stdout.readline(1024 * 1024 + 1)
                 if not line or len(line) > 1024 * 1024:
-                    messages.put(None)
+                    enqueue(None)
                     break
                 message = json.loads(line)
                 if not isinstance(message, dict):
-                    messages.put(None)
+                    enqueue(None)
                     break
-                messages.put(message)
+                enqueue(message)
         except (ValueError, OSError):
-            messages.put(None)
+            enqueue(None)
 
     threading.Thread(target=receive, daemon=True).start()
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + READ_TIMEOUT
 
     def send(message):
         """Write and flush one JSON message, translating pipe errors into a fixed diagnostic."""
+        completed = queue.Queue(maxsize=1)
+        def write():
+            try:
+                p.stdin.write(json.dumps(message) + '\n')
+                p.stdin.flush()
+                completed.put(None)
+            except (OSError, ValueError):
+                completed.put(False)
+        threading.Thread(target=write, daemon=True).start()
         try:
-            p.stdin.write(json.dumps(message) + '\n')
-            p.stdin.flush()
-        except OSError:
+            outcome = completed.get(timeout=max(0, deadline - time.monotonic()))
+        except queue.Empty:
+            raise TimeoutError('Codex usage read timed out') from None
+        if outcome is False:
             raise RuntimeError('Codex app-server exited or returned invalid protocol data') from None
 
     def request(request_id, method, params=None):
@@ -132,8 +174,20 @@ def read_limits(explicit=None):
         request(1, 'initialize', {'clientInfo': {
             'name': 'codex_usage_logger', 'title': 'Local usage logger', 'version': '1.0.0'}})
         send({'method': 'initialized'})
-        return request(2, 'account/rateLimits/read')
+        result = request(2, 'account/rateLimits/read')
+        # No credentials are read or stored. Missing identity suppresses cross-sample deltas.
+        if isinstance(result, dict) and ('rateLimits' in result or 'rateLimitsByLimitId' in result):
+            try:
+                account = request(3, 'account/read', {'refreshToken': False}).get('account') or {}
+                identity = account.get('accountId') or account.get('id') or account.get('email')
+                if isinstance(identity, str) and identity:
+                    key = json.dumps([account.get('type'), identity], separators=(',', ':'))
+                    result = {**result, '_account_key': hashlib.sha256(key.encode()).hexdigest()}
+            except (RuntimeError, TimeoutError, AttributeError):
+                pass
+        return result
     finally:
+        stopped.set()
         # The npm entry point starts a native child. Stop their entire process
         # group so manual invocations cannot leave app-servers behind.
         try:
@@ -161,6 +215,8 @@ def make_rows(result, history, now):
     """Validate quota buckets and derive rows, comparing only matching plans and allowance windows."""
     if not isinstance(result, dict):
         raise ValueError('Invalid usage response')
+    account_key = result.get('_account_key') or ''
+    result = {key: value for key, value in result.items() if key != '_account_key'}
     encoded = json.dumps(result, separators=(',', ':'), ensure_ascii=True)
     if len(encoded) > 65536:
         raise ValueError('Usage response exceeded 64 KiB safety limit')
@@ -171,17 +227,19 @@ def make_rows(result, history, now):
     if not isinstance(buckets, dict) or not buckets:
         raise ValueError('No usage buckets returned; authentication may need attention')
     rows = []
+    sample_id = uuid.uuid4().hex
     for limit_id, bucket in buckets.items():
         if not isinstance(bucket, dict):
             raise ValueError('Invalid usage bucket')
         row = dict.fromkeys(FIELDS, '')
-        row.update(timestamp_utc=utc(now), timestamp_local=now.astimezone().isoformat(timespec='seconds'),
+        row.update(sample_id=sample_id, account_key=account_key, timestamp_utc=utc(now), timestamp_local=now.astimezone().isoformat(timespec='seconds'),
                    status='ok', limit_id=str(limit_id), plan=bucket.get('planType') or '',
                    limit_reached_type=bucket.get('rateLimitReachedType') or '')
         previous = next((r for r in reversed(history)
                          if r['status'] == 'ok' and r['limit_id'] == str(limit_id)), None)
         elapsed = (now - datetime.fromisoformat(previous['timestamp_utc'])).total_seconds() if previous else None
-        comparable = previous and elapsed > 0 and previous['plan'] == row['plan']
+        comparable = (previous and elapsed > 0 and previous['plan'] == row['plan']
+                      and account_key and previous.get('account_key') == account_key)
         if elapsed is not None:
             row['elapsed_minutes'] = round(elapsed / 60, 3)
             row['sampling_gap'] = str(elapsed > 25 * 60).lower()
@@ -283,6 +341,8 @@ def load_history(directory):
     csv.field_size_limit(1024 * 1024)
     with path.open(newline='', encoding='utf-8') as source:
         reader = csv.DictReader(source)
+        if reader.fieldnames == LEGACY_FIELDS:
+            return [{**dict.fromkeys(FIELDS, ''), **row} for row in reader]
         if reader.fieldnames != FIELDS:
             raise RuntimeError('Unexpected history schema; inspect it before continuing')
         return list(reader)
@@ -304,7 +364,7 @@ def sample(directory, explicit=None):
             # Only local fixed diagnostic messages are persisted, never stderr/auth material.
             message = str(exc) if isinstance(exc, (RuntimeError, ValueError, TimeoutError)) else type(exc).__name__
             row = dict.fromkeys(FIELDS, '')
-            row.update(timestamp_utc=utc(now), timestamp_local=now.astimezone().isoformat(timespec='seconds'),
+            row.update(sample_id=uuid.uuid4().hex, timestamp_utc=utc(now), timestamp_local=now.astimezone().isoformat(timespec='seconds'),
                        status='error', error=message[:240])
             rows, success = [row], False
         _, encoded = retain(history + rows, now)
@@ -331,7 +391,8 @@ def status(directory):
         return
     latest_time = history[-1]['timestamp_utc']
     print('Latest reading:', latest_time)
-    for row in [r for r in history if r['timestamp_utc'] == latest_time]:
+    latest_id = history[-1].get('sample_id')
+    for row in [r for r in history if (r.get('sample_id') == latest_id if latest_id else r['timestamp_utc'] == latest_time)]:
         if row['status'] != 'ok':
             print('Error:', row['error'])
             continue
@@ -434,4 +495,8 @@ def main(argv=None):
 
 if __name__ == '__main__':
     os.umask(0o077)
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, ValueError, csv.Error):
+        print('codex-usage: history or configuration operation failed; inspect storage permissions and saved history', file=sys.stderr)
+        raise SystemExit(1)
