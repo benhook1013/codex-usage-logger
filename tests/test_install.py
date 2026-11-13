@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import install
+from src import codex_usage
 
 
 class InstallTests(unittest.TestCase):
@@ -123,9 +124,33 @@ class InstallTests(unittest.TestCase):
                     patch.object(install.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
                     redirect_stdout(io.StringIO()):
                 install.main(['--codex', explicit])
-            self.discovery.assert_called_once_with(explicit)
+            self.discovery.assert_called_once_with(explicit, use_installed=False)
             self.assertIn('CODEX_USAGE_CODEX="' + explicit + '"',
                           (home / '.config/codex-usage/environment').read_text())
+
+    def test_reinstall_repairs_invalid_or_stale_saved_configuration(self):
+        """Resolve a fresh executable without letting damaged saved settings block repair."""
+        for saved in ['UNEXPECTED="broken"\n', 'CODEX_USAGE_CODEX="/missing/old/codex"\n']:
+            with self.subTest(saved=saved), tempfile.TemporaryDirectory() as name:
+                home = Path(name)
+                executable = home / 'bin/codex'
+                executable.parent.mkdir()
+                executable.write_text('#!/bin/sh\nexit 0\n')
+                executable.chmod(0o700)
+                environment = home / '.config/codex-usage/environment'
+                environment.parent.mkdir(parents=True)
+                environment.write_text(saved)
+                with patch.object(Path, 'home', return_value=home), \
+                        patch.dict(os.environ, {'PATH': str(executable.parent)}, clear=True), \
+                        patch.object(install, 'codex_command', wraps=codex_usage.codex_command):
+                    with self.assertRaises(RuntimeError):
+                        codex_usage.codex_command()
+                    install.install(home, home / 'new-profile')
+                    command, configured = codex_usage.codex_command()
+                self.assertEqual(command[0], str(executable))
+                self.assertEqual(configured['CODEX_HOME'], str(home / 'new-profile'))
+                self.assertNotIn('/missing/old', environment.read_text())
+                self.assertNotIn('UNEXPECTED', environment.read_text())
 
     def test_missing_cli_does_not_replace_working_configuration(self):
         with tempfile.TemporaryDirectory() as name:

@@ -22,7 +22,8 @@ def install(home, codex_home, sqlite_home=None, codex=None):
     """Link this checkout and atomically save private profile and CLI paths; preserve regular files."""
     if not os.access(ROOT / 'src/codex_usage.py', os.X_OK):
         raise RuntimeError('Logger source is not executable; restore permission with chmod +x src/codex_usage.py')
-    command, _ = codex_command(codex)
+    # A reinstall must be able to repair corrupt or stale saved settings.
+    command, _ = codex_command(codex, use_installed=False)
     value = 'CODEX_HOME=' + env_quote(str(codex_home)) + '\n'
     value += 'CODEX_USAGE_CODEX=' + env_quote(command[0]) + '\n'
     if sqlite_home is not None:

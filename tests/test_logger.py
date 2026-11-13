@@ -371,6 +371,55 @@ for line in sys.stdin:
             self.assertFalse((directory / '.usage.csv.tmp').exists())
             self.assertLessEqual((directory / 'usage.csv').stat().st_size, logger.MAX_BYTES)
 
+    def test_failed_history_write_cleans_temp_and_preserves_prior_history(self):
+        """Remove partial temporary output on each pre-replacement failure."""
+        real_open = Path.open
+        for failure in ['write', 'flush', 'fsync', 'replace']:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as name:
+                directory = Path(name)
+                with patch.object(logger, 'read_limits', return_value=self.response):
+                    logger.sample(directory)
+                original = (directory / 'usage.csv').read_bytes()
+                error = OSError('injected ' + failure)
+
+                def open_file(path, *args, **kwargs):
+                    output = real_open(path, *args, **kwargs)
+                    if path.name != '.usage.csv.tmp':
+                        return output
+                    proxy = MagicMock(wraps=output)
+                    proxy.__enter__.return_value = proxy
+                    proxy.__exit__.side_effect = lambda *exc: output.__exit__(*exc)
+                    if failure == 'write':
+                        def partial_write(data):
+                            output.write(data[:10])
+                            raise error
+                        proxy.write.side_effect = partial_write
+                    elif failure == 'flush':
+                        proxy.flush.side_effect = error
+                    return proxy
+
+                operation = (patch.object(logger.os, failure, side_effect=error)
+                             if failure in ('fsync', 'replace') else patch.object(Path, 'open', open_file))
+                with patch.object(logger, 'read_limits', return_value=self.response), operation, \
+                        self.assertRaises(OSError) as raised:
+                    logger.sample(directory)
+                self.assertIs(raised.exception, error)
+                self.assertEqual((directory / 'usage.csv').read_bytes(), original)
+                self.assertFalse((directory / '.usage.csv.tmp').exists())
+
+    def test_temp_cleanup_failure_preserves_original_error(self):
+        """A failed best-effort unlink must not replace the write failure."""
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            error = OSError('original sync failure')
+            with patch.object(logger, 'read_limits', return_value=self.response), \
+                    patch.object(logger.os, 'fsync', side_effect=error), \
+                    patch.object(Path, 'unlink', side_effect=OSError('cleanup failure')) as unlink, \
+                    self.assertRaises(OSError) as raised:
+                logger.sample(directory)
+            self.assertIs(raised.exception, error)
+            unlink.assert_called_once_with(missing_ok=True)
+
     def test_history_directory_is_synced_after_replacement(self):
         """Verify durable-write ordering after the new history replaces its temporary file."""
         sync = os.fsync

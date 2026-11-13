@@ -69,9 +69,9 @@ def installed_environment():
     return result
 
 
-def codex_command(explicit=None):
+def codex_command(explicit=None, *, use_installed=True):
     """Choose an explicit, configured, or detected CLI and preserve its shim directory on PATH."""
-    configured = installed_environment()
+    configured = installed_environment() if use_installed else {}
     candidate = explicit or os.environ.get('CODEX_USAGE_CODEX') or configured.get('CODEX_USAGE_CODEX') or shutil.which('codex')
     if not candidate:
         candidates = list((Path.home() / '.nvm/versions/node').glob('v*/bin/codex'))
@@ -369,11 +369,19 @@ def sample(directory, explicit=None):
             rows, success = [row], False
         _, encoded = retain(history + rows, now)
         temporary = directory / '.usage.csv.tmp'
-        with temporary.open('wb') as destination:
-            destination.write(encoded)
-            destination.flush()
-            os.fsync(destination.fileno())
-        os.replace(temporary, directory / 'usage.csv')
+        try:
+            with temporary.open('wb') as destination:
+                destination.write(encoded)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.replace(temporary, directory / 'usage.csv')
+        except BaseException:
+            # Preserve the original failure even if best-effort cleanup fails.
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory_fd)
