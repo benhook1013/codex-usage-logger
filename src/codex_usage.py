@@ -180,8 +180,10 @@ def read_limits(explicit=None):
             try:
                 account = request(3, 'account/read', {'refreshToken': False}).get('account') or {}
                 identity = account.get('accountId') or account.get('id') or account.get('email')
-                if isinstance(identity, str) and identity:
-                    key = json.dumps([account.get('type'), identity], separators=(',', ':'))
+                workspace = account.get('workspaceName')
+                if (isinstance(identity, str) and identity.strip()
+                        and isinstance(workspace, str) and workspace.strip()):
+                    key = json.dumps([account.get('type'), identity, workspace], separators=(',', ':'))
                     result = {**result, '_account_key': hashlib.sha256(key.encode()).hexdigest()}
             except (RuntimeError, TimeoutError, AttributeError):
                 pass

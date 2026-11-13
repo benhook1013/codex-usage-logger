@@ -21,7 +21,7 @@ History lives at `~/.local/share/codex-usage/usage.csv`. Retention is **90 days,
 
 The timer resumes when WSL starts. It cannot sample while WSL is stopped or Windows is asleep, and does not launch WSL at Windows startup. For operation without a login session, enable user lingering with `loginctl enable-linger "$USER"` if needed.
 
-Missing fields stay blank. Reset changes suppress misleading rates. Rates use percentage points per hour; rounded upstream percentages limit precision. Credit changes show net balance movement, not spending attribution. Comparisons require a matching hashed account identity from the read-only account RPC; if identity is unavailable or changes, consumption is left blank. Raw account details are not stored. Each sample has a unique ID, including samples in the same second; existing CSV history is read and upgraded on the next save.
+Missing fields stay blank. Reset changes suppress misleading rates. Rates use percentage points per hour; rounded upstream percentages limit precision. Credit changes show net balance movement, not spending attribution. Comparisons require matching hashed account and workspace identities from the read-only account RPC; if either identity is unavailable or changes, consumption is left blank. Raw account details are not stored. Each sample has a unique ID, including samples in the same second; existing CSV history is read and upgraded on the next save.
 
 ```sh
 # Stop future readings, keeping history
