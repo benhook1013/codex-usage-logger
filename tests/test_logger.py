@@ -143,6 +143,24 @@ class LoggerTests(unittest.TestCase):
         self.assertEqual(rows[1]['weekly_left_pct'], '')
         self.assertEqual(json.loads(rows[0]['response_json']), {k: v for k, v in self.response.items() if k != '_account_key'})
 
+    def test_saved_response_excludes_raw_identity_and_unknown_metadata(self):
+        response = {**self.response, 'accountId': 'fixture-private-account',
+                    'account': {'email': 'fixture-private-email'},
+                    'futureIdentity': 'fixture-future-identity'}
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            with patch.object(logger, 'read_limits', return_value=response):
+                self.assertEqual(logger.sample(directory), 0)
+            content = (directory / 'usage.csv').read_text()
+            for raw in ['fixture-private-account', 'fixture-private-email', 'fixture-future-identity']:
+                self.assertNotIn(raw, content)
+            row = logger.load_history(directory)[0]
+            self.assertEqual(row['account_key'], 'fixture-account')
+            self.assertEqual(row['weekly_left_pct'], '75')
+            self.assertEqual(json.loads(row['response_json']), {
+                'rateLimitsByLimitId': self.response['rateLimitsByLimitId']})
+        self.assertEqual(response['accountId'], 'fixture-private-account')
+
     def test_fallback_single_bucket_and_five_hour_secondary(self):
         bucket = self.response['rateLimitsByLimitId']['codex']
         bucket['secondary'] = {'usedPercent': 12, 'windowDurationMins': 300, 'resetsAt': self.reset}

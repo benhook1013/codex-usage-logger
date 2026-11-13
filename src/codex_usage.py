@@ -216,7 +216,8 @@ def make_rows(result, history, now):
     if not isinstance(result, dict):
         raise ValueError('Invalid usage response')
     account_key = result.get('_account_key') or ''
-    result = {key: value for key, value in result.items() if key != '_account_key'}
+    # Retain only quota payloads, never top-level account identity or future metadata.
+    result = {key: result[key] for key in ('rateLimits', 'rateLimitsByLimitId') if key in result}
     encoded = json.dumps(result, separators=(',', ':'), ensure_ascii=True)
     if len(encoded) > 65536:
         raise ValueError('Usage response exceeded 64 KiB safety limit')
@@ -301,7 +302,7 @@ def make_rows(result, history, now):
             if consumed >= 0:
                 row['credit_consumed'] = str(consumed)
         rows.append(row)
-    # Keep the exact rate-limit response once per reading, without tokens or account identity.
+    # Keep the quota payloads once per reading, without top-level account identity.
     rows[0]['response_json'] = encoded
     return rows
 
