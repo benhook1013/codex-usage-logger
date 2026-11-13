@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -360,9 +361,9 @@ for line in sys.stdin:
             fake = directory / 'codex'
             group_file = directory / 'group'
             ready = directory / 'ready'
-            child_code = ('import signal,time; from pathlib import Path; '
+            child_code = ('import os,signal,time; from pathlib import Path; '
                           'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
-                          f'Path({str(ready)!r}).touch(); time.sleep(30)')
+                          f'Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(30)')
             fake.write_text('''#!/usr/bin/python3
 import json,os,subprocess,sys,time
 from pathlib import Path
@@ -382,6 +383,19 @@ for line in sys.stdin:
                     env={**os.environ, 'PYTHONPATH': str(Path(logger.__file__).parent)},
                     capture_output=True, text=True, timeout=8, check=True)
                 self.assertIn("'test': True", result.stdout)
+                child_pid = int(ready.read_text())
+                deadline = time.monotonic() + 2
+                child_exited = False
+                while time.monotonic() < deadline:
+                    try:
+                        # Orphaned zombies have exited even if PID 1 has not reaped them yet.
+                        state = Path(f'/proc/{child_pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+                        child_exited = state in ('Z', 'X')
+                    except FileNotFoundError:
+                        child_exited = True
+                    if child_exited:
+                        break
+                    time.sleep(0.01)
             finally:
                 # Clean up the fixture even if the regression makes the client hang.
                 if group_file.exists():
@@ -389,6 +403,8 @@ for line in sys.stdin:
                         os.killpg(int(group_file.read_text()), signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+            # Assert the observation made before cleanup, not cleanup's own success.
+            self.assertTrue(child_exited, 'Logger cleanup left the TERM-ignoring child alive')
 
     def test_successful_sample_roundtrip_and_atomic_temp_reused(self):
         with tempfile.TemporaryDirectory() as name:
