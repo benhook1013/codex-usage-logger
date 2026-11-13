@@ -55,9 +55,9 @@ def number(value):
         return None
 
 
-def installed_environment():
+def installed_environment(home=None):
     """Read only the installer's quoted path settings, without executing shell input."""
-    path = Path.home() / '.config/codex-usage/environment'
+    path = (Path.home() if home is None else home) / '.config/codex-usage/environment'
     if not path.exists():
         return {}
     result = {}
@@ -244,6 +244,8 @@ def make_rows(result, history, now):
             row['elapsed_minutes'] = round(elapsed / 60, 3)
             row['sampling_gap'] = str(elapsed > 25 * 60).lower()
         windows = [bucket.get('primary'), bucket.get('secondary')]
+        if any(window is not None and not isinstance(window, dict) for window in windows):
+            raise ValueError('Invalid usage window')
         for name, duration in [('five_hour', 300), ('weekly', 10080)]:
             window = next((w for w in windows if isinstance(w, dict) and w.get('windowDurationMins') == duration), None)
             if not window:

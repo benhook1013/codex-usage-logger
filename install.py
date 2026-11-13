@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from src.codex_usage import codex_command
+from src.codex_usage import codex_command, installed_environment
 
 ROOT = Path(__file__).resolve().parent
 
@@ -18,12 +18,39 @@ def env_quote(value):
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$') + '"'
 
 
-def install(home, codex_home, sqlite_home=None, codex=None):
+def saved_defaults(home):
+    """Recover usable defaults without letting malformed saved configuration block repair."""
+    try:
+        saved = installed_environment(home)
+    except (RuntimeError, UnicodeError):
+        return {}
+    valid = {}
+    for key, value in saved.items():
+        path = Path(value).expanduser()
+        if not value or not path.is_absolute():
+            continue
+        if key == 'CODEX_USAGE_CODEX':
+            usable = path.is_file() and os.access(path, os.X_OK)
+        else:
+            usable = path.is_dir()
+        if usable:
+            valid[key] = str(path)
+    return valid
+
+
+def install(home, codex_home=None, sqlite_home=None, codex=None):
     """Link this checkout and atomically save private profile and CLI paths; preserve regular files."""
     if not os.access(ROOT / 'src/codex_usage.py', os.X_OK):
         raise RuntimeError('Logger source is not executable; restore permission with chmod +x src/codex_usage.py')
     # A reinstall must be able to repair corrupt or stale saved settings.
-    command, _ = codex_command(codex, use_installed=False)
+    saved = saved_defaults(home)
+    selected = codex or os.environ.get('CODEX_USAGE_CODEX') or saved.get('CODEX_USAGE_CODEX')
+    command, _ = codex_command(selected, use_installed=False)
+    codex_home = Path(codex_home or os.environ.get('CODEX_HOME') or
+                      saved.get('CODEX_HOME') or home / '.codex').expanduser().resolve()
+    sqlite_home = sqlite_home or os.environ.get('CODEX_SQLITE_HOME') or saved.get('CODEX_SQLITE_HOME')
+    if sqlite_home is not None:
+        sqlite_home = Path(sqlite_home).expanduser().resolve()
     value = 'CODEX_HOME=' + env_quote(str(codex_home)) + '\n'
     value += 'CODEX_USAGE_CODEX=' + env_quote(command[0]) + '\n'
     if sqlite_home is not None:
@@ -69,15 +96,12 @@ def main(argv=None):
     """Enable the timer and attempt a bounded first read, reporting read failures without undoing setup."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-home', type=Path,
-                        default=Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))),
-                        help='Existing Codex profile; defaults to CODEX_HOME or ~/.codex')
+                        help='Existing Codex profile; defaults to CODEX_HOME, saved profile, or ~/.codex')
     parser.add_argument('--sqlite-home', type=Path,
-                        default=os.environ.get('CODEX_SQLITE_HOME'),
-                        help='Existing Linux Codex database directory; defaults to CODEX_SQLITE_HOME when set')
+                        help='Existing Linux Codex database directory; defaults to CODEX_SQLITE_HOME or saved path')
     parser.add_argument('--codex', help='Codex executable to preserve for scheduled reads (normally auto-detected)')
     args = parser.parse_args(argv)
-    install(Path.home(), args.codex_home.expanduser().resolve(),
-            args.sqlite_home.expanduser().resolve() if args.sqlite_home else None, args.codex)
+    install(Path.home(), args.codex_home, args.sqlite_home, args.codex)
     env = os.environ.copy()
     # Let systemctl use the user manager's private socket; desktop-inherited
     # session-bus addresses can be stale inside WSL.

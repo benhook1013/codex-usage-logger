@@ -33,6 +33,17 @@ class LoggerTests(unittest.TestCase):
         self.assertEqual(row['five_hour_left_pct'], '')
         self.assertEqual(row['five_hour_event'], 'unavailable')
 
+    def test_malformed_window_is_recorded_as_error(self):
+        for field in ['primary', 'secondary']:
+            for value in [[], 'malformed', 0, False]:
+                with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as name:
+                    response = {'rateLimits': {field: value}}
+                    with patch.object(logger, 'read_limits', return_value=response):
+                        self.assertEqual(logger.sample(Path(name)), 1)
+                    rows = logger.load_history(Path(name))
+                    self.assertEqual(rows[-1]['status'], 'error')
+                    self.assertEqual(rows[-1]['error'], 'Invalid usage window')
+
     def test_same_window_rate_and_exact_credit_delta(self):
         history = self.rows()
         self.response['rateLimitsByLimitId']['codex']['primary']['usedPercent'] = 38
